@@ -1,0 +1,4 @@
+numpy>=2.0
+pandas>=2.2
+scikit-learn>=1.5
+# results in the site were produced with numpy 2.5.3, pandas 3.0.5, scikit-learn 1.9.1, Python 3.13

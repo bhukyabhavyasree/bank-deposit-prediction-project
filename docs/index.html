@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Predicting Bank Term Deposits</title>
+<meta name="description" content="ES 335 project: can pre-call bank records rank which clients will subscribe to a term deposit, and does that ranking survive a move forward in time?">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<style>.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}fieldset.seg{padding:0;margin:0 0 12px;min-width:0}</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="shell">
+  <aside class="rail">
+    <a class="brand" href="#top">Term-deposit prediction<span>ES 335 project</span></a>
+    <nav aria-label="Sections">
+      <a href="#question">Question</a>
+      <a href="#data">Data</a>
+      <a href="#preprocessing">Preprocessing</a>
+      <a href="#methods">Baseline and methods</a>
+      <a href="#evaluation">Evaluation</a>
+      <a href="#results">Results</a>
+      <a href="#errors">Errors</a>
+      <a href="#limitations">Limitations</a>
+      <a href="#conclusion">Conclusion</a>
+      <a href="#reproduce">Reproduction</a>
+    </nav>
+    <button class="theme-btn" id="theme" type="button" aria-pressed="false">Dark theme</button>
+  </aside>
+
+  <main id="main">
+    <!-- ===================================================== HERO -->
+    <header class="hero" id="top">
+      <h1>Who says yes to a term deposit?</h1>
+      <p class="lede">Can a bank's records rank clients before it phones them, and does that ranking still work a year later?</p>
+      <p class="byline">ES 335 project by <span class="todo">[your name]</span> &middot; Bank Marketing data, UCI Machine Learning Repository</p>
+
+      <div class="brief">
+        <p><strong>Short answer.</strong> Yes, but only a little. On the most recent fifth of the file, a logistic regression reaches ROC-AUC <span class="num" data-v="test.metrics.logreg.auc"></span> and PR-AUC <span class="num" data-v="test.metrics.logreg.ap"></span>. A one-line rule, &ldquo;call the people who said yes last time&rdquo;, scores <span class="num" data-v="test.metrics.rule.auc"></span> and <span class="num" data-v="test.metrics.rule.ap"></span>, and the PR-AUC gap between the two is inside bootstrap noise. Gradient boosting, the more complex model, scores lower than both on PR-AUC (<span class="num" data-v="test.metrics.hgb.ap"></span>).</p>
+        <p><strong>Why it is hard.</strong> The share of clients who subscribed climbed from <span class="num" data-v="split.train.prevalence" data-f="p1"></span> in the training period to <span class="num" data-v="split.test.prevalence" data-f="p1"></span> in the test period, while interest rates fell to levels the models never saw. Scrambling the rows into a random split hides all of this and reports an AUC of about <span class="num" data-v="D.rand.logreg.auc" data-f="f2"></span>.</p>
+      </div>
+
+      <figure class="fig" id="fig-timeline">
+        <figcaption><b>The file is a timeline, and the target moves with it</b>Share of clients who subscribed (top) and the 3-month Euribor rate (bottom), in 41 consecutive slices of about 1,000 rows. Shading shows which rows are used for training, validation and testing. Hover to read a slice.</figcaption>
+        <div class="chart" id="chart-timeline"></div>
+      </figure>
+    </header>
+
+    <!-- ===================================================== QUESTION -->
+    <section id="question" aria-labelledby="h-question">
+      <h2 id="h-question">Question</h2>
+      <div class="prose">
+        <p><strong>Using only what a Portuguese retail bank knows about a client before it dials, and the economic conditions that day, can we rank clients by how likely they are to subscribe to a term deposit, and does a ranking learned on earlier campaigns still work on later ones?</strong></p>
+        <p>Phone calls cost agent time, and most clients say no. A useful ranking lets the bank spend a fixed number of calls where they pay off most. A useful <em>answer</em> to this project is not &ldquo;the model is accurate&rdquo; but &ldquo;the model beats a trivial baseline on a later period, by this much, with this uncertainty, and fails in these places&rdquo;.</p>
+      </div>
+      <dl class="frame">
+        <dt>One row</dt><dd>One client in one marketing campaign, described by their last contact: who they are, how they were reached, their history with the bank, and the outcome.</dd>
+        <dt>Target</dt><dd><code>y</code>: did the client subscribe to a term deposit (yes or no)?</dd>
+        <dt>Prediction time</dt><dd>Just before a call is placed.</dd>
+        <dt>Known at that time</dt><dd>Age, job, marital status, education, credit and loan flags, contact channel, calendar month and weekday, history from earlier campaigns, and public economic indicators (employment variation, consumer price and confidence indices, 3-month Euribor, employment level).</dd>
+        <dt>Not known</dt><dd><code>duration</code> (how long the call lasted) exists only after the call. <code>campaign</code> counts the contacts made to this client <em>including the last one</em>, so for a row it is only final once the client's contacts have ended. Neither is used by the main models. The data section shows why, and the results section measures what using them would have done.</dd>
+        <dt>Limits of the claim</dt><dd>This describes association in one bank's 2008&ndash;2010 campaigns. It does not say <em>why</em> a client subscribes, and it says nothing about clients the bank never called.</dd>
+      </dl>
+    </section>
+
+    <!-- ===================================================== DATA -->
+    <section id="data" aria-labelledby="h-data">
+      <h2 id="h-data">Data</h2>
+      <div class="prose">
+        <p><strong>Source and access.</strong> The <em>Bank Marketing</em> dataset in the UCI Machine Learning Repository (Moro, Rita and Cortez, 2014), file <code>bank-additional-full.csv</code>. It records phone campaigns run by a Portuguese retail bank between May 2008 and November 2010. It is free to download without an account under a CC BY 4.0 licence, contains no names or contact details, and a copy is included in this repository with attribution.</p>
+        <p><strong>Size.</strong> <span data-v="quality.rows" data-f="int"></span> rows, <span data-v="quality.columns" data-f="int"></span> columns: 20 inputs and the target. Overall, <span data-v="D.overall_rate" data-f="p1"></span> of rows are &ldquo;yes&rdquo;.</p>
+        <p><strong>Rows are in time order.</strong> The file has no date column, only month and weekday, but the documentation orders rows by date. I confirmed it by reading the month sequence, which runs May&ndash;Dec, then wraps back to March twice. Counting the wraps recovers the calendar year: 2008 has <span data-v="eda.year_rows.2008.rows" data-f="int"></span> rows (<span data-v="eda.year_rows.2008.rate" data-f="p1"></span> yes), 2009 has <span data-v="eda.year_rows.2009.rows" data-f="int"></span> (<span data-v="eda.year_rows.2009.rate" data-f="p1"></span>) and 2010 has <span data-v="eda.year_rows.2010.rows" data-f="int"></span> (<span data-v="eda.year_rows.2010.rate" data-f="p1"></span>). I use the derived year only to describe the data. It is never a model input, because a model cannot know the year of a future call.</p>
+      </div>
+
+      <details class="tv" style="max-width:920px;margin:0 0 24px"><summary>Data dictionary: all 21 columns</summary><div class="tablewrap" id="tbl-dict"></div></details>
+
+      <h3>Quality checks</h3>
+      <div class="tablewrap" style="max-width:920px" id="tbl-quality"></div>
+
+      <figure class="fig" id="fig-unknown">
+        <figcaption><b>Where the file says &ldquo;unknown&rdquo;</b>Share of all rows coded as unknown, per column. <code>default</code> is the worst: a fifth of clients have no recorded credit-default status.</figcaption>
+        <div class="chart" id="chart-unknown"></div>
+      </figure>
+
+      <h3>What the training block shows</h3>
+      <div class="prose"><p>The next chart uses the <strong>training block only</strong> (the first 60% of rows, May&ndash;November 2008), so that no exploration is done on rows reserved for validation or testing. It is descriptive. A group with a higher rate is not one that is <em>caused</em> to subscribe more. Contact channel, for example, changes over time along with everything else.</p></div>
+      <figure class="fig" id="fig-rates">
+        <figcaption><b>Share who subscribed, by group (training block)</b>Pick a variable. The dashed line is the training-block average.</figcaption>
+        <fieldset class="seg" id="rates-dim"><legend class="sr">Variable</legend>
+          <label><input type="radio" name="rates-dim" value="poutcome" checked><span>Previous outcome</span></label>
+          <label><input type="radio" name="rates-dim" value="job"><span>Job</span></label>
+          <label><input type="radio" name="rates-dim" value="month"><span>Month</span></label>
+          <label><input type="radio" name="rates-dim" value="contact"><span>Contact</span></label>
+          <label><input type="radio" name="rates-dim" value="age"><span>Age</span></label>
+          <label><input type="radio" name="rates-dim" value="education"><span>Education</span></label>
+          <label><input type="radio" name="rates-dim" value="marital"><span>Marital</span></label>
+        </fieldset>
+        <div class="chart" id="chart-rates"></div>
+      </figure>
+
+      <h3>Two variables I leave out, and why</h3>
+      <div class="prose">
+        <p><code>duration</code> is the strongest single column: on its own it separates subscribers from non-subscribers with ROC-AUC <span data-v="eda.duration_auc_train" data-f="f2"></span> in the training block. That is the warning sign. A call lasts long <em>because</em> the client is interested, so a model using it answers &ldquo;who talked longest?&rdquo;, which the bank only learns after dialling. The dataset's own documentation says it should be dropped for realistic prediction.</p>
+        <p><code>campaign</code> includes the final contact, so a client who subscribes early has a low count and one who never does keeps accumulating calls. In the training block it carries almost no signal anyway (ROC-AUC <span data-v="eda.campaign_auc_train_inverted" data-f="f2"></span> when inverted), so leaving it out costs little.</p>
+      </div>
+      <div class="pair">
+        <figure class="fig" id="fig-duration" style="margin:6px 0 20px"><figcaption><b>By last-call length</b>Share subscribing, training block. Known only after the call.</figcaption><div class="chart" id="chart-duration"></div></figure>
+        <figure class="fig" id="fig-campaign" style="margin:6px 0 20px"><figcaption><b>By contacts in this campaign</b>Share subscribing, training block. Almost flat.</figcaption><div class="chart" id="chart-campaign"></div></figure>
+      </div>
+
+      <h3>The economy columns move together</h3>
+      <div class="prose"><p>The five economic indicators are strongly correlated (training block). That is harmless for tree models but makes a linear model's individual coefficients unstable, which is one reason I treat them as a bundle (included or excluded together) rather than picking them one by one.</p></div>
+      <div class="tablewrap" style="max-width:760px" id="tbl-corr"></div>
+    </section>
+
+    <!-- ===================================================== PREPROCESSING -->
+    <section id="preprocessing" aria-labelledby="h-prep">
+      <h2 id="h-prep">Preprocessing</h2>
+      <div class="prose">
+        <ul>
+          <li><strong>&ldquo;unknown&rdquo; stays a category.</strong> There are no empty cells, so there is nothing to impute. Replacing &ldquo;unknown&rdquo; with the most common value would invent data and erase a pattern that may carry information.</li>
+          <li><strong><code>pdays</code> becomes two columns.</strong> The value 999 means &ldquo;never contacted&rdquo;, so treating it as a number would say these clients were last contacted 999 days ago. I use a never-contacted flag and a days-since column that is 0 for those clients.</li>
+          <li><strong>Categories are one-hot encoded</strong> (ten categorical columns). Levels are learned from the fitting rows. A level seen only later, such as September, which first appears in the test block, becomes all zeros rather than an error.</li>
+          <li><strong>Numeric columns are standardised</strong> using the fitting rows' mean and spread. This matters for the penalised logistic regression. It is harmless for trees.</li>
+          <li><strong>Excluded:</strong> <code>duration</code>, <code>campaign</code> and the derived year (see Data). Nothing else is dropped.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <b class="t">How leakage is prevented</b>
+        <p>Every learned step (scaler, category levels, model weights) lives inside one scikit-learn <code>Pipeline</code> that is fitted on the rows of the <em>fitting block only</em>. The validation block is used to choose settings. The test block is scored once, at the end, by models refitted on train plus validation. The category-rate chart above uses the training block only.</p>
+      </div>
+<pre><code>pre = ColumnTransformer([
+    ("num", StandardScaler(), numeric_cols),
+    ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols),
+])
+model = Pipeline([("pre", pre), ("clf", LogisticRegression(C=C))])
+model.fit(df.iloc[fit_rows], y.iloc[fit_rows])      # scaler and categories learned here only
+scores = model.predict_proba(df.iloc[eval_rows])[:, 1]</code></pre>
+      <div class="prose"><p><strong>Statistical reasoning.</strong> The only inferential statistic in this project is the bootstrap, used on the test block to put intervals on the metrics and on differences between methods (see Evaluation). I use no significance tests on the descriptive charts, because they would answer a question I am not asking.</p></div>
+    </section>
+
+    <!-- ===================================================== METHODS -->
+    <section id="methods" aria-labelledby="h-methods">
+      <h2 id="h-methods">Baseline and methods</h2>
+      <div class="prose"><p>Four things are compared. The first two are baselines a model has to beat before its complexity is justified.</p></div>
+      <div class="tablewrap" style="max-width:980px"><table class="tbl">
+        <thead><tr><th>Method</th><th>Core idea</th><th>Assumptions and why it fits</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sw" style="background:var(--c-prior)"></span><b>No-skill baseline</b></td><td class="m">Give every client the same score.</td><td class="m">Ranking quality is then pure chance: ROC-AUC 0.5, and PR-AUC equal to the share who subscribe. This is the floor for the imbalanced-data metrics.</td></tr>
+          <tr><td><span class="sw" style="background:var(--c-rule)"></span><b>Previous-success rule</b></td><td class="m">Score 1 if the previous campaign ended in success, else 0.</td><td class="m">A bank manager would try this first. It assumes past behaviour repeats and ignores everything else. If a model cannot beat it, the extra machinery adds nothing.</td></tr>
+          <tr><td><span class="sw" style="background:var(--c-lr)"></span><b>Logistic regression</b></td><td class="m">Fit weights that minimise log-loss plus an L2 penalty; smaller <code>C</code> shrinks harder.</td><td class="m">Assumes the log-odds of subscribing are a sum of effects of the features. Few parameters, stable when the data shifts, and each weight can be read. A natural first real model for 25,000 rows of tabular data.</td></tr>
+          <tr><td><span class="sw" style="background:var(--c-gbm)"></span><b>Gradient-boosted trees</b></td><td class="m">Add many small trees, each fitted to the errors of the ones before.</td><td class="m">Learns interactions and non-linear effects without being told. It assumes the training rows resemble the rows it will be used on. A tree cannot extrapolate: a value outside the training range is treated like the nearest edge.</td></tr>
+        </tbody></table></div>
+      <h3>What I tuned, and how</h3>
+      <div class="prose">
+        <p>Settings are chosen on the <strong>validation block</strong> by PR-AUC. Logistic regression tries six values of <code>C</code>. Gradient boosting tries 24 combinations of learning rate, tree size, L2 penalty and number of trees. Each is tried with and without the five economy indicators, because I could not tell in advance whether they help or merely stand in for the date. The figure shows all 60 configurations.</p>
+      </div>
+      <figure class="fig" id="fig-tuning">
+        <figcaption><b>Validation PR-AUC of every configuration tried</b>Each dot is one configuration. The ringed dot was chosen. Dashed lines mark the no-skill baseline and the one-line rule on the same block. Hover a dot for its settings.</figcaption>
+        <div class="legend"><span><i class="dot sw-lr"></i>Logistic</span><span><i class="dot sw-gbm"></i>Boosting</span></div>
+        <div class="chart" id="chart-tuning"></div>
+      </figure>
+      <div class="tablewrap" style="max-width:980px" id="tbl-tuning"></div>
+      <div class="prose"><p>Validation chose the version <em>without</em> the economy indicators for both models. Logistic regression is the stronger of the two on validation, so it is the primary model. I did not try neural networks or larger ensembles: with about 25,000 training rows, a handful of weak signals and a strong shift in the data, more flexibility is a liability, not an advantage.</p></div>
+    </section>
+
+    <!-- ===================================================== EVALUATION -->
+    <section id="evaluation" aria-labelledby="h-eval">
+      <h2 id="h-eval">Evaluation</h2>
+      <div class="prose">
+        <p><strong>Design.</strong> The deployment situation is &ldquo;learn from past campaigns, call clients in future ones&rdquo;, so the split follows time: the first 60% of rows to train, the next 20% to choose settings, the last 20% as a test I look at once. Split points are row <span data-v="split.index_cuts.0" data-f="int"></span> and row <span data-v="split.index_cuts.1" data-f="int"></span>.</p>
+      </div>
+      <div class="splitbar" id="splitbar" aria-hidden="true"></div>
+      <div class="tablewrap" style="max-width:920px" id="tbl-split"></div>
+      <div class="note">
+        <b class="t">What I did not change</b>
+        <p>I looked at the share of subscribers in each block before fitting any model, and that is how I found how large the drift is. I kept the planned 60/20/20 split anyway. Moving the cut points to make the test block look more like the training block would mean choosing the evaluation after seeing the answer. Instead, the random split and the rolling cut-offs further down are reported as extra views, clearly labelled.</p>
+      </div>
+      <h3>Procedure</h3>
+      <div class="prose"><ol>
+        <li>Fit each candidate on the training block, score the validation block, pick the best settings by PR-AUC.</li>
+        <li>Refit the chosen settings on training plus validation. The most recent rows matter most when conditions drift.</li>
+        <li>Score the test block once and report. Nothing in step 3 feeds back into steps 1&ndash;2.</li>
+      </ol></div>
+      <h3>Metrics, and why these</h3>
+      <div class="prose"><ul>
+        <li><strong>PR-AUC</strong> (average precision) rewards putting subscribers at the top of the list, and suits a rare positive class. It is read against the no-skill line, which equals the share of subscribers. Here that is <span data-v="split.test.prevalence" data-f="p1"></span> on the test block, so the same PR-AUC means different things in different periods.</li>
+        <li><strong>ROC-AUC</strong> is the chance that a random subscriber is ranked above a random non-subscriber. It does not depend on how common subscribers are, so it is the fairer number when that share moves.</li>
+        <li><strong>Reach and precision at a call budget</strong>: if the bank can only call the top 20%, how many of the calls succeed, and how many of all subscribers are reached? This is the operational question.</li>
+        <li><strong>Brier score and calibration</strong> check whether the scores can be read as probabilities. They cannot here (see Results).</li>
+        <li><strong>Not used: accuracy.</strong> Always answering &ldquo;no&rdquo; is <span data-v="D.test_majority_acc" data-f="p0"></span> accurate on the test block and <span data-v="D.train_majority_acc" data-f="p0"></span> on the training block. The number mostly measures how rare subscribers happen to be.</li>
+      </ul></div>
+      <h3>Uncertainty</h3>
+      <div class="prose"><p>Intervals come from <span data-v="meta.bootstrap_resamples" data-f="int"></span> bootstrap resamples of the test rows. Differences between methods use the <em>same</em> resamples for both, so they are paired. The bootstrap treats rows as independent. They are not (they come in time order), so the intervals are narrower than the truth. Read them as a floor on the uncertainty.</p></div>
+      <h3>Extra views, not used for any decision</h3>
+      <div class="prose"><ul>
+        <li><strong>Random split:</strong> the same procedure on a shuffled stratified 60/20/20 split, three seeds.</li>
+        <li><strong>Rolling cut-offs:</strong> train on the first 50%, 60%, &hellip; 90% of rows and test on the next 10%, with settings fixed from the primary run.</li>
+        <li><strong>Feature ablations:</strong> add or remove feature groups with settings fixed.</li>
+      </ul><p>These reuse rows from the test and validation blocks after the main result was fixed. They explain it. They did not change it.</p></div>
+    </section>
+
+    <!-- ===================================================== RESULTS -->
+    <section id="results" aria-labelledby="h-results">
+      <h2 id="h-results">Results</h2>
+      <h3 style="margin-top:0">Headline: the simple model matches the rule, and the complex one trails</h3>
+      <div class="tablewrap" style="max-width:980px" id="tbl-results"></div>
+      <figure class="fig" id="fig-forest">
+        <figcaption><b>Test-block scores with 95% bootstrap intervals</b>Dashed lines are the no-skill levels.</figcaption>
+        <div class="pair"><div class="chart" id="chart-forest-ap"></div><div class="chart" id="chart-forest-auc"></div></div>
+        <div class="hint">Left: PR-AUC. Right: ROC-AUC.</div>
+      </figure>
+      <div class="prose">
+        <p>Logistic regression has the best ROC-AUC (<span data-v="test.metrics.logreg.auc"></span>, interval <span data-v="test.metrics.logreg.auc_ci.0"></span> to <span data-v="test.metrics.logreg.auc_ci.1"></span>), clearly above the rule (<span data-v="test.metrics.rule.auc"></span>, interval <span data-v="test.metrics.rule.auc_ci.0"></span> to <span data-v="test.metrics.rule.auc_ci.1"></span>), but on PR-AUC the paired difference between them is <span data-v="test.paired_diffs.logreg_minus_rule.mean" data-f="sg3"></span> with an interval that straddles zero. In plain terms: the model orders the whole list better, but at the top of the list, where calls are placed, the one-line rule is just as good. Boosting is worse than logistic regression by <span data-v="test.paired_diffs.hgb_minus_logreg.mean" data-f="sg3"></span> PR-AUC, and that gap holds in every one of the resamples.</p>
+      </div>
+      <div class="tablewrap" style="max-width:980px" id="tbl-diffs"></div>
+
+      <h3>Try it: build a call list</h3>
+      <div class="prose"><p>Every client in the test block has a score from each method. Choose a method, then decide how many clients to phone, highest score first. The panel shows what that budget buys, and, below, <em>who</em> it reaches and who it misses.</p></div>
+      <div class="explorer" id="explorer">
+        <div class="ex-grid">
+          <div>
+            <fieldset class="seg" role="radiogroup"><legend class="sr">Method</legend>
+              <label><input type="radio" name="ex-model" value="logreg"><span>Logistic</span></label>
+              <label><input type="radio" name="ex-model" value="hgb"><span>Boosting</span></label>
+              <label><input type="radio" name="ex-model" value="rule"><span>Rule</span></label>
+            </fieldset>
+            <div class="ctl"><label class="h" for="ex-k">Clients called: <output id="ex-kout" for="ex-k"></output></label>
+              <input type="range" id="ex-k" min="1" max="100" step="1" value="20"></div>
+            <div class="readout" id="ex-readout" aria-live="polite"></div>
+            <table class="cm" id="ex-cm"></table>
+          </div>
+          <figure id="fig-gains" style="margin:0">
+            <div class="legend"><span><i class="sw-lr"></i>Logistic</span><span><i class="sw-gbm"></i>Boosting</span><span><i class="sw-rule"></i>Rule (dashed)</span></div>
+            <div class="chart" id="chart-gains"></div>
+            <div class="hint">Hover to compare methods at any budget. Click to set the slider there. A curve higher and further left is better.</div>
+          </figure>
+        </div>
+        <div class="ex-seg">
+          <div class="ctl"><label class="h" for="ex-dim">Who gets reached? Break the call list down by</label>
+            <select id="ex-dim"><option value="poutcome">Previous campaign outcome</option><option value="contact">Contact channel</option><option value="year">Year</option><option value="month">Month</option><option value="job">Job</option></select></div>
+          <div class="chart" id="chart-seg" style="margin-top:8px"></div>
+          <div class="hint" id="ex-seg-note"></div>
+        </div>
+      </div>
+      <div class="prose"><p>The rule's curve rises steeply through the previous successes and then follows a straight line, because once they are called it can only dial at random. At a 20% budget all three methods reach roughly a third of subscribers with a little over half the calls succeeding. Try the segment view with the <strong>month</strong> option for the logistic model, and compare May with October and March. That pattern is explained under Errors.</p></div>
+
+      <h3>The scores are rankings, not probabilities</h3>
+      <div class="prose"><p>Both models were trained where about 5% of clients subscribed. On the test block about <span data-v="split.test.prevalence" data-f="p0"></span> do, so their average predicted score (<span data-v="test.metrics.logreg.mean_score" data-f="p0"></span> for logistic, <span data-v="test.metrics.hgb.mean_score" data-f="p0"></span> for boosting) is far too low. Their Brier scores (<span data-v="test.metrics.logreg.brier"></span> and <span data-v="test.metrics.hgb.brier"></span>) are no better than the <span data-v="D.brier_const"></span> that a constant guess of the test-block rate would score.</p></div>
+      <figure class="fig" id="fig-calib" style="max-width:620px">
+        <figcaption><b>Predicted versus actual, ten equal bins of the test block</b>Points on the dashed diagonal would mean the score is a trustworthy probability. Almost everything sits above it, and the top bin falls back toward the line, so a higher score is not always a higher rate.</figcaption>
+        <div class="chart" id="chart-calib"></div>
+      </figure>
+      <div class="prose"><p>A probability cut-off is a bet that the score scale stays put. For each model I picked a cut-off on the validation block by maximising F1. On the test block it calls a similar share of clients (logistic <span data-v="test.frozen_threshold.logreg.val_pred_pos_share" data-f="p0"></span> to <span data-v="test.frozen_threshold.logreg.test_pred_pos_share" data-f="p0"></span>, boosting <span data-v="test.frozen_threshold.hgb.val_pred_pos_share" data-f="p0"></span> to <span data-v="test.frozen_threshold.hgb.test_pred_pos_share" data-f="p0"></span>), but the share who subscribe nearly tripled, so the same cut-off is clearly off for logistic regression (F1 <span data-v="test.frozen_threshold.logreg.test_f1"></span>, against <span data-v="test.frozen_threshold.logreg.oracle_test_f1"></span> for the best possible test cut-off) and close to right for boosting (<span data-v="test.frozen_threshold.hgb.test_f1"></span> against <span data-v="test.frozen_threshold.hgb.oracle_test_f1"></span>). There was no way to know which in advance. A call budget, a share of the list, does not depend on the score scale, which is why the explorer uses one.</p></div>
+      <div class="tablewrap" style="max-width:980px" id="tbl-frozen"></div>
+
+      <h3>Try it: move the cut-off date</h3>
+      <div class="prose"><p>How much does the result depend on <em>when</em> the line between past and future is drawn? Pick how much of the file to train on. The next 10% of rows is the test. Settings are the ones chosen in the primary run.</p></div>
+      <figure class="fig" id="fig-roll">
+        <figcaption><b>Performance on the block that follows the training period</b></figcaption>
+        <fieldset class="seg" id="roll-ctl" role="radiogroup" aria-label="Training cut-off"></fieldset>
+        <div class="prose" id="roll-info" aria-live="polite" style="margin:0 0 10px;font-size:.98rem"></div>
+        <div class="legend"><span><i class="sw-lr"></i>Logistic</span><span><i class="sw-gbm"></i>Boosting</span><span><i class="sw-rule"></i>Rule</span></div>
+        <div class="pair"><div><div class="lbl-strong" style="font:600 .85rem var(--sans);margin-bottom:4px">ROC-AUC (0.5 = chance)</div><div class="chart" id="chart-roll-auc"></div></div>
+        <div><div class="lbl-strong" style="font:600 .85rem var(--sans);margin-bottom:4px">PR-AUC (dashed = no skill)</div><div class="chart" id="chart-roll-ap"></div></div></div>
+      </figure>
+      <div class="prose"><p>With the earliest cut-off (training on May to early August 2008 and testing on August to November 2008) both models rank <em>worse than chance</em>: the lowest ROC-AUC across all cut-offs is <span data-v="D.rolling_min_auc"></span>. A pattern learned over a few early months reversed in the months that followed. Every later cut-off is above chance but moves between about 0.55 and 0.68. The test block itself, cut into four consecutive periods, shows modest and uneven skill while the share subscribing climbs several-fold:</p></div>
+      <div class="tablewrap" style="max-width:980px" id="tbl-chunks"></div>
+
+      <h3>What a random split would have said</h3>
+      <div class="prose"><p>Shuffling the rows and splitting at random lets training rows sit between the test rows in time. A model can then learn which <em>period</em> a row belongs to (the economy columns and the month are nearly a date stamp) and look up the answer.</p></div>
+      <figure class="fig" id="fig-dumbbell" style="max-width:640px">
+        <figcaption><b>Same procedure, two ways of splitting</b>Filled dot: time-ordered test (primary). Hollow dot: random split, mean of three seeds.</figcaption>
+        <div class="chart" id="chart-dumbbell"></div>
+      </figure>
+      <div class="tablewrap" style="max-width:820px" id="tbl-random"></div>
+      <div class="prose"><p>The random split reports ROC-AUC near <span data-v="D.rand.logreg.auc" data-f="f2"></span> to <span data-v="D.rand.hgb.auc" data-f="f2"></span> and puts boosting ahead. The honest split reports <span data-v="test.metrics.logreg.auc" data-f="f2"></span> and puts logistic regression ahead. A reader who trusted the random split would believe a stronger model and pick the wrong method.</p></div>
+
+      <h3>Which inputs matter: ablations</h3>
+      <div class="tablewrap" style="max-width:980px" id="tbl-ablation"></div>
+      <div class="prose">
+        <ul>
+          <li><strong><code>duration</code> is a leak.</strong> Adding the call length lifts logistic ROC-AUC from <span data-v="D.nomacro_lr_auc"></span> to <span data-v="D.dur_lr_auc"></span>. That jump is information from the future. It is not predictive skill.</li>
+          <li><strong><code>campaign</code> changes almost nothing</strong>, as the data section suggested.</li>
+          <li><strong>The economy columns are ambiguous.</strong> For logistic regression they help on the test block (<span data-v="D.macro_lr_auc"></span> versus <span data-v="D.nomacro_lr_auc"></span>), and for boosting they hurt. Validation preferred leaving them out, and I followed validation. I do not read the test-block gain as evidence that they work. Every test row has a Euribor value outside the range seen in training (<span data-v="split.euribor_range_train.0" data-f="f1"></span>&ndash;<span data-v="split.euribor_range_train.1" data-f="f1"></span>% in training, <span data-v="split.euribor_range_test.0" data-f="f1"></span>&ndash;<span data-v="split.euribor_range_test.1" data-f="f1"></span>% in test). A linear model extends its line, which happened to point the right way. Trees hold the last value. Neither is learning the relationship.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ===================================================== ERRORS -->
+    <section id="errors" aria-labelledby="h-errors">
+      <h2 id="h-errors">Errors</h2>
+      <div class="prose"><p>This section examines the primary model (logistic regression) at a 20% call budget on the test block: the top <span data-v="errors.operating_point.calls" data-f="int"></span> clients by score. It reaches <span data-v="errors.operating_point.recall" data-f="p0"></span> of all subscribers, and <span data-v="errors.operating_point.precision" data-f="p0"></span> of its calls succeed.</p></div>
+      <div style="max-width:420px"><table class="cm" id="tbl-errcm"></table></div>
+
+      <h3>Where it goes wrong</h3>
+      <div class="prose"><ul>
+        <li><strong>Most subscribers have no history.</strong> <span data-v="D.err.sub_nonexist" data-f="p0"></span> of test-block subscribers had never been contacted before, and they make up <span data-v="D.err.fn_nonexist" data-f="p0"></span> of the subscribers the list misses. For them the model has only weak signals, and it reaches <span data-v="D.err.nonexist_reach" data-f="p0"></span> of them. For previous successes it reaches <span data-v="D.err.success_reach" data-f="p0"></span>.</li>
+        <li><strong>The list sorts by month before it sorts by client.</strong> It calls every October client and nearly every March client, and few in May: it reaches only <span data-v="D.err.may_reach" data-f="p0"></span> of May&rsquo;s subscribers. That follows real differences between months (in the test block <span data-v="D.err.oct_rate" data-f="p0"></span> of October clients subscribed, against <span data-v="D.err.may_rate" data-f="p0"></span> in May), but October&rsquo;s effect was learned from just <span data-v="D.err.oct_train_n" data-f="int"></span> rows, and within a month the model has little to separate one client from another. With two and a half years of data I cannot tell seasonality apart from the timing of particular campaign waves.</li>
+        <li><strong>Previous success is not a promise.</strong> Of previous successes who are called, <span data-v="D.err.success_prec" data-f="p0"></span> subscribe again. The eight most confident wrong calls are all of this type.</li>
+        <li><strong>Later periods are easier to reach.</strong> Reach is much higher in 2010 than in 2009, but subscribers are also about half of all 2010 clients, so any list is richer there.</li>
+      </ul></div>
+
+      <div class="pair" style="margin-top:12px">
+        <div class="tablewrap" id="tbl-seg-poutcome"></div>
+        <div class="tablewrap" id="tbl-seg-year"></div>
+        <div class="tablewrap" id="tbl-seg-contact"></div>
+        <div class="tablewrap" id="tbl-seg-month"></div>
+      </div>
+
+      <h3>Representative errors</h3>
+      <div class="prose"><p><strong>Most confident wrong calls</strong> (highest scores among clients who did not subscribe). All eight are October contacts who had said yes to an earlier campaign and were reached by mobile phone, and seven of the eight are retired or students:</p></div>
+      <div class="tablewrap" id="tbl-fp-worst"></div>
+      <div class="prose"><p><strong>Most confident misses</strong> (lowest scores among clients who subscribed anyway). All eight had an unsuccessful earlier campaign, and six were reached on a landline:</p></div>
+      <div class="tablewrap" id="tbl-fn-worst"></div>
+      <div class="prose"><p><strong>Typical errors</strong> are less dramatic: six clients drawn at random (fixed seed) from each error group, wasted calls on the left and missed subscribers on the right.</p></div>
+      <div class="pair">
+        <div class="tablewrap" id="tbl-fp-typ"></div>
+        <div class="tablewrap" id="tbl-fn-typ"></div>
+      </div>
+      <div class="prose"><p>In both groups the record alone cannot separate the client who repeats an earlier answer from the one who changes it.</p></div>
+    </section>
+
+    <!-- ===================================================== LIMITATIONS -->
+    <section id="limitations" aria-labelledby="h-limits">
+      <h2 id="h-limits">Limitations</h2>
+      <div class="prose"><ul>
+        <li><strong>One bank, three years, and a regime change.</strong> The rate of subscription rises from <span data-v="split.train.prevalence" data-f="p1"></span> to <span data-v="split.test.prevalence" data-f="p1"></span>. I cannot tell from this file whether clients changed or whether the bank changed whom it called. The test block is a different world from the training block, so the headline numbers say how well a model <em>transfers</em>, and they would be different for any other cut.</li>
+        <li><strong>Selection.</strong> Only clients who were phoned appear. The data cannot say how a never-called client would have responded, so the ranking is validated only on people the bank had already chosen to call.</li>
+        <li><strong>Association, not cause.</strong> A feature that predicts is not a reason to subscribe. Contact channel, month and economy are tangled with time.</li>
+        <li><strong>Uncertainty is understated.</strong> The bootstrap treats rows as independent, and they are not. Settings were tuned on one validation block that is itself unlike the test block.</li>
+        <li><strong>Unreliable probabilities.</strong> Scores support ranking only. Using them as probabilities, or with a fixed cut-off, would fail.</li>
+        <li><strong>Diagnostics are not independent.</strong> The rolling cut-offs and ablations reuse validation and test rows after the main result was fixed. They explain the result and are not a second test.</li>
+        <li><strong>Fairness was not audited.</strong> The models use age, marital status, education and job. Prioritising calls on those could treat groups differently, and I did not measure that.</li>
+        <li><strong>Sentinel and near-constant columns</strong> (<code>pdays</code>, <code>default</code>) are handled simply, and <code>unknown</code> may not be missing at random.</li>
+      </ul></div>
+    </section>
+
+    <!-- ===================================================== CONCLUSION -->
+    <section id="conclusion" aria-labelledby="h-concl">
+      <h2 id="h-concl">Conclusion</h2>
+      <div class="prose">
+        <p>Using only information available before a call, logistic regression ranks later clients with ROC-AUC <span data-v="test.metrics.logreg.auc"></span>, above chance and above the one-line previous-success rule on that measure. It does not clearly beat the rule where it counts for a call list, and gradient boosting does worse than both. Added complexity did not pay for itself because the thing that changed between training and test was the world, not the model.</p>
+        <p>Three lessons carry over. <strong>First</strong>, a variable that makes a model look excellent (call duration) is a warning, not a gift. <strong>Second</strong>, the way the data is split can reverse which model looks best, so the split has to match how the model will be used. <strong>Third</strong>, a baseline that costs one line of code is the fastest way to see whether a model is earning its place.</p>
+        <p><strong>If I continued:</strong> weight recent rows more, retrain on a schedule and monitor the subscription rate for drift, recalibrate scores on the latest period before using any threshold, and evaluate within later campaigns separately.</p>
+      </div>
+    </section>
+
+    <!-- ===================================================== REPRODUCTION -->
+    <section id="reproduce" aria-labelledby="h-repro">
+      <h2 id="h-repro">Reproduction</h2>
+      <div class="prose">
+        <p>Everything on this page, every number and chart, is produced by one script and rendered from its output file, so the page and the code cannot drift apart. The run takes about four minutes on a laptop and is deterministic (fixed seed).</p>
+      </div>
+<pre><code>git clone &lt;repository-url&gt; &amp;&amp; cd bank-deposit-ml
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt
+python analysis/run_analysis.py data/bank-additional-full.csv docs/data/results.json
+python -m http.server -d docs 8000        # then open http://localhost:8000</code></pre>
+      <dl class="frame">
+        <dt>Data</dt><dd><code>data/bank-additional-full.csv</code> (included). Original: UCI Machine Learning Repository, &ldquo;Bank Marketing&rdquo;, <code>bank-additional.zip</code>. No account or credentials needed.</dd>
+        <dt>Split</dt><dd>Rows are in file order. Train = rows 0&ndash;<span data-v="split.index_cuts.0" data-f="int"></span> (exclusive), validation = up to row <span data-v="split.index_cuts.1" data-f="int"></span>, test = the rest. Random-split views use <code>train_test_split</code> with seeds 1, 2, 3.</dd>
+        <dt>Selection rule</dt><dd>Highest validation PR-AUC, separately for each model. Feature set (with or without economy columns) is chosen the same way.</dd>
+        <dt>Environment</dt><dd id="code-versions"></dd>
+        <dt>Files</dt><dd><code>analysis/run_analysis.py</code> (everything), <code>docs/</code> (this site), <code>docs/data/results.json</code> (all numbers and the test-block scores behind the explorer).</dd>
+        <dt>Publish</dt><dd>On GitHub: Settings, Pages, deploy from branch <code>main</code>, folder <code>/docs</code>.</dd>
+      </dl>
+
+      <footer>
+        <p><strong>AI assistance.</strong> Claude (Anthropic) helped draft the analysis script and this website's code and text, and suggested checks such as the leakage review of <code>duration</code> and <code>campaign</code>. All results come from running the script, and the numbers on this page are read from its output file.</p>
+        <p><strong>Data and credits.</strong> S. Moro, P. Rita and P. Cortez (2014), <em>Bank Marketing</em>, UCI Machine Learning Repository, <a href="https://doi.org/10.24432/C5K306">doi.org/10.24432/C5K306</a>, licensed CC BY 4.0. Method paper: S. Moro, P. Cortez and P. Rita (2014), &ldquo;A data-driven approach to predict the success of bank telemarketing&rdquo;, <em>Decision Support Systems</em> 62, 22&ndash;31. Built with scikit-learn, pandas and NumPy. Fonts: Archivo and Source Serif 4 (SIL Open Font License) via Google Fonts. The chart colours for the three methods were checked for colour-vision deficiency.</p>
+      </footer>
+    </section>
+  </main>
+</div>
+<script src="data/results.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

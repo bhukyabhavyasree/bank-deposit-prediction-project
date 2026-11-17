@@ -2,9 +2,9 @@
 
 Interactive project website (static, GitHub Pages) built on the UCI *Bank Marketing* data.
 
-- **Live site:** `https://<your-github-username>.github.io/<repo-name>/`  <- fill in after publishing
-- **Source repo:** `https://github.com/<your-github-username>/<repo-name>`
-- **Author:** [your name]   (AI assistance is disclosed at the bottom of the site)
+- **GitHub Pages site:** `https://bhukyabhavyasree.github.io/bank-deposit-prediction-project/`
+- **Source repo:** `https://github.com/bhukyabhavyasree/bank-deposit-prediction-project`
+- **Author:** Bhukya Bhavyasree   (AI assistance is disclosed at the bottom of the site)
 
 ## Question
 Using only information available before a call, can we rank clients by likelihood of subscribing to a term
@@ -23,15 +23,14 @@ python -m http.server -d docs 8000                                              
 `docs/data/results.js` is the same payload as `results.json` so the page also opens from a double-click.
 
 ## Publish on GitHub Pages
-1. Create a repo and push this folder.
-2. Settings -> Pages -> Build and deployment -> Deploy from a branch -> `main` / `/docs` -> Save.
-3. Wait ~1 minute, open the URL, and paste both links into the submission.
+1. In Settings -> Pages -> Build and deployment, choose Deploy from a branch, then `main` / `/docs`, and save.
+2. Wait for the site to publish, then open the Pages URL above and verify it loads.
+3. Submit the live site and source repository links.
 
 ## Layout
 - `analysis/run_analysis.py` - all modelling; writes every number and chart input the site shows
 - `docs/` - the website (`index.html`, `assets/`, `data/`)
 - `data/` - dataset copy (CC BY 4.0) and its documentation
-- `VIVA_NOTES.md` - key choices and likely "small change" questions
 
 ## Data and credits
 Moro, Rita, Cortez (2014). *Bank Marketing*. UCI Machine Learning Repository, https://doi.org/10.24432/C5K306 (CC BY 4.0).
@@ -39,6 +38,6 @@ Moro, Cortez, Rita (2014). A data-driven approach to predict the success of bank
 No credentials or private data are used.
 
 ## TODO before submitting
-- Replace `[your name]` in `docs/index.html` and this file; fill in the two links above.
-- Re-read the "AI assistance" note on the site and edit it to describe your own checks.
+- Re-read the "AI assistance" note on the site and ensure it accurately describes the tools used and checks performed.
 - Confirm the citation/licence details on the UCI dataset page.
+- Prepare to explain your contribution, key choices, evaluation, one limitation, and a small change during the viva.

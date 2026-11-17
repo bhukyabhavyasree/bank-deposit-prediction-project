@@ -36,8 +36,3 @@ python -m http.server -d docs 8000                                              
 Moro, Rita, Cortez (2014). *Bank Marketing*. UCI Machine Learning Repository, https://doi.org/10.24432/C5K306 (CC BY 4.0).
 Moro, Cortez, Rita (2014). A data-driven approach to predict the success of bank telemarketing. *Decision Support Systems* 62:22-31.
 No credentials or private data are used.
-
-## TODO before submitting
-- Re-read the "AI assistance" note on the site and ensure it accurately describes the tools used and checks performed.
-- Confirm the citation/licence details on the UCI dataset page.
-- Prepare to explain your contribution, key choices, evaluation, one limitation, and a small change during the viva.
